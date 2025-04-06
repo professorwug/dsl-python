@@ -29,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_panchen_data(file_path="data/PanChen.parquet"):
+def load_panchen_data(file_path="tests/PanChen_test/PanChen.parquet"):
     """Load PanChen dataset from R data file.
 
     Args:
