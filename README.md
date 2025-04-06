@@ -1,4 +1,4 @@
-# DSL: Design-based Supervised Learning (Python & R)
+# DSL: Design-based Supervised Learning (Python)
 
 ## Repository Overview
 
