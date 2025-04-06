@@ -1,0 +1,14 @@
+dsl.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+dsl/__pycache__/
+dsl/helpers/__pycache__/
+.venv/
+.pytest_cache/
+.DS_Store
+.idea/
+.vscode/

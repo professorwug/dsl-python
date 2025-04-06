@@ -1,0 +1,27 @@
+ > summary (out)             
+==================
+DSL Specification:
+==================
+Model:  logit
+Call:  SendOrNot ~ countyWrong + prefecWrong + connect2b + prevalence + regionj + groupIssue    
+
+Predicted Variables:  countyWrong
+Prediction:  pred_countyWrong
+
+Number of Labeled Observations:  500
+Random Sampling for Labeling with Equal Probability: Yes
+
+=============
+Coefficients:
+=============
+            Estimate Std. Error CI Lower CI Upper p value
+(Intercept)   2.0978     0.3621   1.3881   2.8075  0.0000 ***
+countyWrong  -0.2617     0.2230  -0.6988   0.1754  0.1203
+prefecWrong  -1.1162     0.2970  -1.6982  -0.5342  0.0001 ***
+connect2b    -0.0788     0.1197  -0.3134   0.1558  0.2552    
+prevalence   -0.3271     0.1520  -0.6250  -0.0292  0.0157   *
+regionj       0.1253     0.4566  -0.7695   1.0202  0.3919
+groupIssue   -2.3222     0.3597  -3.0271  -1.6172  0.0000 ***
+---
+Signif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+> % confidence intervals (CI) are reported.
