@@ -1,4 +1,4 @@
-# DSL: Design-based Supervised Learning (Python)
+# DSL-Kit: Design-based Supervised Learning (Python)
 
 ## Repository Overview
 
@@ -6,7 +6,24 @@ This repository hosts parallel implementations of the Design-based Supervised Le
 
 The primary goal of the Python implementation was to create a version that closely mirrors the statistical methodology and produces comparable results to the established **R** package, originally developed by Naoki Egami.
 
-DSL combines supervised machine learning techniques with methods from survey statistics and econometrics to estimate regression models when outcome labels are only available for a non-random subset of the data (partially labeled data).
+## What is DSL?
+
+The DSL method (Design-based Supervised Learning) is a framework designed to correct for biases that occur when automated text annotations (from LLMs or supervised ML methods) are used as if they were error‐free in downstream statistical analyses.
+
+### Key Components
+
+#### Two-Step Approach
+1. **Automated Annotation**: Use an automated method (e.g., an LLM) to label a large corpus of text.
+2. **Expert Correction**: Randomly sample a subset of documents for expert coding. The known sampling probabilities allow researchers to estimate the average prediction error.
+
+#### Bias Correction
+DSL constructs a design-adjusted outcome by subtracting a bias-correction term (derived from the difference between automated predictions and expert labels, weighted by the sampling probability) from the predicted outcome. This adjustment ensures that prediction errors—especially when they are non-random—do not bias subsequent regression estimates.
+
+#### Robust Inference
+By leveraging a doubly robust estimation approach (similar to augmented inverse probability weighting), DSL provides consistent estimates and valid confidence intervals, even if the automated annotation errors are correlated with other variables in the analysis.
+
+#### General Applicability
+Although demonstrated in the context of text classification tasks, DSL is general enough to be applied to various types of statistical models (e.g., linear regression, logistic regression) and can accommodate different types of automated annotation methods.
 
 ## Original R Package Documentation
 
@@ -25,7 +42,7 @@ For the theoretical background, detailed methodology, and original R package usa
 ### From PyPI
 
 ```bash
-pip install dsl
+pip install dsl_kit
 ```
 
 ### From Source
@@ -53,8 +70,9 @@ The core estimation function is `dsl.dsl()`. Here's a basic example:
 
 ```python
 import pandas as pd
+import numpy as np
 from patsy import dmatrices
-from dsl.dsl import dsl
+from dsl_kit.dsl import dsl
 
 # Prepare your data
 # Your data should have:
@@ -86,7 +104,91 @@ print(f"Coefficients: {result.coefficients}")
 print(f"Standard Errors: {result.standard_errors}")
 ```
 
+### Function Parameters
+
+The `dsl()` function has the following parameters:
+
+```python
+def dsl(
+    X: np.ndarray,
+    y: np.ndarray,
+    labeled_ind: np.ndarray,
+    sample_prob: np.ndarray,
+    model: str = "logit",
+    method: str = "linear",
+    fe_Y: np.ndarray = None,
+    fe_X: np.ndarray = None,
+) -> DSLResult:
+```
+
+- **X**: Design matrix (numpy array)
+- **y**: Response variable (numpy array)
+- **labeled_ind**: Binary indicator for labeled data (1) or unlabeled data (0)
+- **sample_prob**: Sampling probability for each observation
+- **model**: Model type, options include:
+  - "logit": For binary outcomes (default)
+  - "lm": For continuous outcomes
+  - "felm": For fixed effects models
+- **method**: Estimation method, options include:
+  - "linear": For linear models
+  - "logistic": For logistic models
+  - "fixed_effects": For fixed effects models
+- **fe_Y**: Fixed effects for the outcome variable (required for fixed effects models)
+- **fe_X**: Fixed effects for the predictor variables (required for fixed effects models)
+
+### Return Value
+
+The function returns a `DSLResult` object with the following attributes:
+
+- **coefficients**: Estimated model coefficients
+- **standard_errors**: Standard errors for the coefficients
+- **vcov**: Variance-covariance matrix
+- **objective**: Value of the objective function at the solution
+- **success**: Boolean indicating if the estimation converged
+- **message**: Convergence message
+- **niter**: Number of iterations performed
+- **model**: Model type used
+- **labeled_size**: Number of labeled observations
+- **total_size**: Total number of observations
+- **predicted_values**: Predicted values for all observations
+- **residuals**: Residuals for all observations
+
+### Example with Fixed Effects
+
+```python
+# For fixed effects models, you need to provide fe_Y and fe_X
+result = dsl(
+    X=X.values,
+    y=y.values.flatten(),
+    labeled_ind=data["labeled"].values,
+    sample_prob=data["sample_prob"].values,
+    model="felm",
+    method="fixed_effects",
+    fe_Y=data["fixed_effect_y"].values,  # Fixed effects for outcome
+    fe_X=data["fixed_effect_x"].values,  # Fixed effects for predictors
+)
+
+# Access predicted values and residuals
+print(f"Predicted Values: {result.predicted_values}")
+print(f"Residuals: {result.residuals}")
+```
+
 For a complete example using the PanChen dataset, see the tests directory.
+
+## Applications
+
+### LLM and Synthetic Data Applications
+- Validate LLM outputs against expert annotations
+- Correct biases in synthetic training data
+- Scale annotation while maintaining statistical rigor
+- Estimate true model performance with partially labeled data
+
+### General Use Cases
+- **Social Sciences:** Analyzing survey data where only a subset of responses are labeled
+- **Machine Learning:** Improving model performance when labeled data is limited
+- **Econometrics:** Estimating models with partially observed outcomes
+- **Healthcare:** Predicting patient outcomes with limited labeled data
+- **Synthetic Data Generation:** Creating and utilizing synthetic data to enhance model training and validation
 
 ## ELI5 
 
@@ -95,16 +197,6 @@ Imagine you have a large dataset of images, but only a few of them are labeled w
 When you have synthetic data, you can create more examples that mimic the real data. DSL can then use these synthetic examples to learn more about the patterns in your data, making it even better at predicting the contents of unlabeled images. This approach is especially helpful when you have limited real data but need a robust model.
 
 DSL can also help you find the best way to split your data for training and testing. By analyzing how well the model performs on different parts of your data, DSL can identify effective splits that improve model accuracy. Additionally, DSL can detect biases in synthetic data, ensuring that your model is fair and representative of the real-world data it will encounter.
-
-## Potential Applications
-
-DSL can be used in various fields, such as:
-
-- **Social Sciences:** Analyzing survey data where only a subset of responses are labeled.
-- **Machine Learning:** Improving model performance when labeled data is limited.
-- **Econometrics:** Estimating models with partially observed outcomes.
-- **Healthcare:** Predicting patient outcomes with limited labeled data.
-- **Synthetic Data Generation:** Creating and utilizing synthetic data to enhance model training and validation.
 
 ## Contributing
 

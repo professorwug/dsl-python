@@ -1,4 +1,4 @@
-dsl.egg-info/
+dsl_kit.egg-info/
 __pycache__/
 *.pyc
 *.pyo
@@ -12,3 +12,6 @@ dsl/helpers/__pycache__/
 .DS_Store
 .idea/
 .vscode/
+dist/
+build/
+*.egg-info/

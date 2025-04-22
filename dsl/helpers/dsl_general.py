@@ -9,6 +9,14 @@ import pandas as pd
 import statsmodels.api as sm  # Import statsmodels
 from scipy.optimize import minimize
 
+from .fixed_effects import demean_dsl, felm_dsl_Jacobian, felm_dsl_moment_base
+from .moment import (
+    lm_dsl_Jacobian,
+    lm_dsl_moment_base,
+    logit_dsl_Jacobian,
+    logit_dsl_moment_base,
+)
+
 
 def dsl_general(
     Y_orig: np.ndarray,
@@ -56,14 +64,6 @@ def dsl_general(
     Tuple[np.ndarray, Dict[str, Any]]
         Estimated parameters and additional information
     """
-    from .moment import (
-        felm_dsl_moment_base,
-        lm_dsl_Jacobian,
-        lm_dsl_moment_base,
-        logit_dsl_Jacobian,
-        logit_dsl_moment_base,
-    )
-
     if moment_fn is None:
         if model == "lm":
             moment_fn = lm_dsl_moment_base
@@ -71,302 +71,139 @@ def dsl_general(
             moment_fn = logit_dsl_moment_base
         elif model == "felm":
             moment_fn = felm_dsl_moment_base
+            # For fixed effects, we need to demean the data
+            if fe_Y is not None and fe_X is not None:
+                # Create a temporary DataFrame for demeaning
+                temp_df = pd.DataFrame(
+                    {
+                        "id": range(len(Y_orig)),
+                        "fe": fe_Y.argmax(axis=1) if fe_Y.ndim > 1 else fe_Y,
+                    }
+                )
+                Y_orig, X_orig = demean_dsl(temp_df, Y_orig, X_orig, ["fe"])[:2]
+                Y_pred, X_pred = demean_dsl(temp_df, Y_pred, X_pred, ["fe"])[:2]
 
     if jac_fn is None:
         if model == "lm":
             jac_fn = lm_dsl_Jacobian
         elif model == "logit":
             jac_fn = logit_dsl_Jacobian
+        elif model == "felm":
+            jac_fn = felm_dsl_Jacobian
 
-    # Standardize data to make estimation easier
-    X_orig_use = np.ones_like(X_orig)
-    X_pred_use = np.ones_like(X_pred)
-    scale_cov = np.where(np.std(X_pred, axis=0) > 0)[0]
-
-    # Check if first column is intercept
-    with_intercept = np.all(X_orig[:, 0] == 1)
-    mean_X = np.zeros(X_pred.shape[1])
-    sd_X = np.ones(X_pred.shape[1])
-
-    if with_intercept:
-        # For models with intercept
-        for j in scale_cov:
-            X_pred_use[:, j] = (X_pred[:, j] - np.mean(X_pred[:, j])) / np.std(
-                X_pred[:, j]
-            )
-            X_orig_use[:, j] = (X_orig[:, j] - np.mean(X_pred[:, j])) / np.std(
-                X_pred[:, j]
-            )
-            mean_X[j] = np.mean(X_pred[:, j])
-            sd_X[j] = np.std(X_pred[:, j])
-        mean_X = mean_X[1:]  # Remove first element (intercept)
-        sd_X = sd_X[1:]  # Remove first element (intercept)
+    # Initial parameter estimate
+    n_main_orig = X_orig.shape[1]  # Store original number of main parameters
+    n_params = n_main_orig
+    if model == "felm" and fe_X is not None:
+        n_fe_params = fe_X.shape[1]
+        n_params += n_fe_params
     else:
-        # For models without intercept
-        for j in scale_cov:
-            X_pred_use[:, j] = X_pred[:, j] / np.std(X_pred[:, j])
-            X_orig_use[:, j] = X_orig[:, j] / np.std(X_pred[:, j])
-            sd_X[j] = np.std(X_pred[:, j])
+        n_fe_params = 0
+    par_init = np.zeros(n_params)
 
-    # Initial parameter estimate using statsmodels on labeled data
-    try:
-        labeled_mask = labeled_ind == 1
-        # Ensure Y_orig is 1D for statsmodels
-        Y_orig_labeled = Y_orig.flatten()[labeled_mask]
-        X_orig_labeled_use = X_orig_use[labeled_mask]
-
-        if np.sum(labeled_mask) > 0 and X_orig_labeled_use.shape[1] > 0:
-            if model == "logit":
-                logit_model = sm.Logit(Y_orig_labeled, X_orig_labeled_use)
-
-                # Define gradient for logit (negative log-likelihood)
-                def logit_grad(params):
-                    p = 1 / (1 + np.exp(-X_orig_labeled_use @ params))
-                    return -X_orig_labeled_use.T @ (Y_orig_labeled - p)
-
-                logit_results = logit_model.fit(
-                    method="bfgs",
-                    fprime=logit_grad,  # Provide analytical gradient
-                    maxiter=5000,
-                    disp=0,
-                )
-                par_init = logit_results.params
-            elif model == "lm":
-                ols_model = sm.OLS(Y_orig_labeled, X_orig_labeled_use)
-                ols_results = ols_model.fit()
-                par_init = ols_results.params
-            else:  # Default to zeros if model not lm/logit or other issue
-                print(
-                    f"Warning: Model type '{model}' not supported "
-                    "for statsmodels init. Using zeros."
-                )
-                par_init = np.zeros(X_orig_use.shape[1])
-        else:
-            print(
-                "Warning: No labeled data or features for initial "
-                "estimation. Using zeros."
-            )
-            par_init = np.zeros(X_orig_use.shape[1])
-
-    except Exception as e:
-        print(
-            f"Error during initial statsmodels fit: {e}. " "Using zeros for par_init."
-        )
-        par_init = np.zeros(X_orig_use.shape[1])
-
-    # Add small perturbation if still zero (e.g., perfect separation)
-    if np.all(par_init == 0):
-        par_init = par_init + 1e-6
-
-    # Define objective function (GMM-like: mean(moment)' mean(moment))
+    # Define objective function
     def objective(par):
-        if model == "felm":
-            # FELM needs special handling, assuming moment_fn handles FE
-            m = moment_fn(
-                par,
-                labeled_ind,
-                sample_prob_use,
-                Y_orig.flatten(),  # Ensure flattened Y
-                X_orig_use,
-                Y_pred.flatten(),  # Ensure flattened Y
-                X_pred_use,
-                fe_Y,
-                fe_X,
-            )
-        else:
-            m = moment_fn(
-                par,
-                labeled_ind,
-                sample_prob_use,
-                Y_orig.flatten(),  # Ensure flattened Y
-                X_orig_use,
-                Y_pred.flatten(),  # Ensure flattened Y
-                X_pred_use,
-            )
-        # Objective: sum of squared mean moments
-        mean_m = np.mean(m, axis=0)
-        return np.sum(mean_m**2)
+        return dsl_general_moment(
+            par,
+            labeled_ind,
+            sample_prob_use,
+            Y_orig,
+            X_orig,  # Pass standardized X
+            Y_pred,
+            X_pred,  # Pass standardized X
+            fe_Y=fe_Y,
+            fe_X=fe_X,
+            model=model,
+            n_main_orig=n_main_orig,  # Pass original n_main
+        )
 
-    # Define gradient function
-    def gradient(par):
-        # Calculate average Jacobian J (k x k)
-        if model == "felm":
-            # Assuming jac_fn for felm returns the correct (k x k) average J
-            J = jac_fn(
-                par,
-                labeled_ind,
-                sample_prob_use,
-                Y_orig.flatten(),
-                X_orig_use,
-                Y_pred.flatten(),
-                X_pred_use,
-                model=model,
-                fe_Y=fe_Y,  # Pass FE info if needed by jac_fn
-                fe_X=fe_X,
-            )
-            # Recalculate moments m (n x k)
-            m = moment_fn(
-                par,
-                labeled_ind,
-                sample_prob_use,
-                Y_orig.flatten(),
-                X_orig_use,
-                Y_pred.flatten(),
-                X_pred_use,
-                fe_Y,
-                fe_X,
-            )
-        else:
-            J = jac_fn(
-                par,
-                labeled_ind,
-                sample_prob_use,
-                Y_orig.flatten(),
-                X_orig_use,
-                Y_pred.flatten(),
-                X_pred_use,
-                model=model,
-            )
-            # Recalculate moments m (n x k)
-            m = moment_fn(
-                par,
-                labeled_ind,
-                sample_prob_use,
-                Y_orig.flatten(),
-                X_orig_use,
-                Y_pred.flatten(),
-                X_pred_use,
-            )
-
-        # Gradient: 2 * J.T @ mean(m)
-        mean_m = np.mean(m, axis=0)
-        # Ensure mean_m is (k, 1) for matmul
-        grad = 2 * J.T @ mean_m.reshape(-1, 1)
-        return grad.flatten()  # Optimizer expects flattened gradient
-
-    # R-like optimization parameters
-    optim_options = {
-        "maxiter": 5000,
-        "gtol": 1.5e-8,  # Gradient tolerance (match R's default reltol)
-        "disp": False,
-        "eps": 1e-8,  # Step size for finite diff (if jac=None)
-    }
-
-    # Optimize using BFGS to match R's optim default for glm-like problems
+    # Optimize
     result = minimize(
         objective,
         par_init,
-        method="BFGS",  # Use BFGS optimizer
-        jac=gradient,
-        options=optim_options,
+        method="BFGS",
+        options={"maxiter": 1000, "disp": False},
     )
 
-    # Compute sandwich variance estimator
-    n_obs = X_orig.shape[0]
-    n_features = X_orig.shape[1]
+    # Compute standard errors
+    J = dsl_general_Jacobian(
+        result.x,
+        labeled_ind,
+        sample_prob_use,
+        Y_orig,
+        X_orig,  # Pass standardized X
+        Y_pred,
+        X_pred,  # Pass standardized X
+        model=model,
+        fe_Y=fe_Y,
+        fe_X=fe_X,
+        n_main_orig=n_main_orig,  # Pass original n_main
+    )
 
-    # Recalculate Jacobian and Moments at optimal parameters (result.x)
-    par_opt_scaled = result.x  # Parameters are scaled at this point
-    if model == "felm":
-        J = jac_fn(
-            par_opt_scaled,
-            labeled_ind,
-            sample_prob_use,
-            Y_orig.flatten(),
-            X_orig_use,
-            Y_pred.flatten(),
-            X_pred_use,
-            model=model,
-            fe_Y=fe_Y,
-            fe_X=fe_X,
-        )
-        m = moment_fn(
-            par_opt_scaled,
-            labeled_ind,
-            sample_prob_use,
-            Y_orig.flatten(),
-            X_orig_use,
-            Y_pred.flatten(),
-            X_pred_use,
-            fe_Y,
-            fe_X,
-        )
-    else:
-        J = jac_fn(
-            par_opt_scaled,
-            labeled_ind,
-            sample_prob_use,
-            Y_orig.flatten(),
-            X_orig_use,
-            Y_pred.flatten(),
-            X_pred_use,
-            model=model,
-        )
-        m = moment_fn(
-            par_opt_scaled,
-            labeled_ind,
-            sample_prob_use,
-            Y_orig.flatten(),
-            X_orig_use,
-            Y_pred.flatten(),
-            X_pred_use,
-        )
+    # Compute variance-covariance matrix
+    # Need to calculate the 'meat' (Omega) using moment contributions
+    # Omega = E[m_i * m_i.T]
+    moments = dsl_general_moment_contributions(
+        result.x,
+        labeled_ind,
+        sample_prob_use,
+        Y_orig,
+        X_orig,
+        Y_pred,
+        X_pred,
+        fe_Y=fe_Y,
+        fe_X=fe_X,
+        model=model,
+        n_main_orig=n_main_orig,
+    )
+    n_obs = moments.shape[0]
+    omega = (moments.T @ moments) / n_obs
 
-    # J should be (k, k), m should be (n, k)
-    if J.shape != (n_features, n_features):
-        raise ValueError(
-            f"Jacobian shape mismatch: Expected ({n_features},{n_features}), got {J.shape}"
-        )
-    if m.shape[1] != n_features:
-        raise ValueError(
-            f"Moment shape mismatch: Expected (*, {n_features}), got {m.shape}"
-        )
+    # Sandwich variance: (J^-1) * Omega * (J^-1).T / n
+    # Note: R code seems to calculate J slightly differently sometimes,
+    # and the scaling might differ. This follows the standard GMM formula.
+    try:
+        J_inv = np.linalg.inv(J)
+        vcov = (J_inv @ omega @ J_inv.T) / n_obs
+    except np.linalg.LinAlgError:
+        print("Jacobian is singular, using pseudo-inverse")
+        J_inv = np.linalg.pinv(J)
+        vcov = (J_inv @ omega @ J_inv.T) / n_obs
 
-    # Compute sandwich variance estimator using helper function
-    vcov_scaled = compute_sandwich_var(J, m, n_obs)
+    # Ensure vcov is positive semi-definite for SE calculation
+    vcov = (vcov + vcov.T) / 2  # Symmetrize
+    min_eig = np.min(np.real(np.linalg.eigvals(vcov)))
+    if min_eig < 0:
+        # Add regularization if not PSD
+        vcov += (-min_eig + 1e-8) * np.eye(vcov.shape[0])
 
-    # Rescale parameters back to original scale
-    par_final = np.copy(result.x)  # Start with optimized scaled params
-    if with_intercept:
-        if n_features > 1:  # Check if there are non-intercept features
-            # Unscale non-intercept parameters: par_orig = par_scaled / sd
-            par_orig_non_intercept = par_final[1:] / sd_X
-            # Unscale intercept: b0_orig = b0_s - np.sum(b_orig * mean)
-            par_orig_intercept = par_final[0] - np.sum(par_orig_non_intercept * mean_X)
-            # Update final parameters
-            par_final[0] = par_orig_intercept
-            par_final[1:] = par_orig_non_intercept
-        # If only intercept, par_final[0] is already in original scale
-    else:
-        # Unscale all parameters: par_orig = par_scaled / sd
-        par_final = par_final / sd_X
+    try:
+        se = np.sqrt(np.diag(vcov))
+    except RuntimeWarning as e:
+        print(f"Warning calculating standard errors: {e}")
+        se = np.full(vcov.shape[0], np.nan)
 
-    # Create the rescaling Jacobian D = d(par_orig)/d(par_scaled)
-    D_rescale_jacobian = np.identity(n_features)
-    if with_intercept:
-        if n_features > 1:
-            # d(b1_orig)/d(b1_s) = 1/sd
-            inv_sd_X = 1.0 / sd_X
-            np.fill_diagonal(D_rescale_jacobian[1:, 1:], inv_sd_X)
-            # d(b0_orig)/d(b1_s) = -mean/sd
-            D_rescale_jacobian[0, 1:] = -mean_X / sd_X
-        # d(b0_orig)/d(b0_s) = 1 (already set by identity)
-    else:
-        # d(b_orig)/d(b_s) = 1/sd
-        inv_sd_X = 1.0 / sd_X
-        np.fill_diagonal(D_rescale_jacobian, inv_sd_X)
-
-    # Rescale variance: vcov_orig = D @ vcov_scaled @ D.T
-    vcov_final = D_rescale_jacobian @ vcov_scaled @ D_rescale_jacobian.T
+    # Predict values and calculate residuals
+    predicted_values = dsl_predict_internal(
+        result.x, X_orig, X_pred, model, fe_Y, fe_X, n_main_orig, n_fe_params
+    )
+    residuals = Y_orig - predicted_values
 
     # Return results
-    return par_final, {
-        "vcov": vcov_final,
-        "standard_errors": np.sqrt(np.diag(vcov_final)),
+    return result.x, {
+        "standard_errors": se,
+        "vcov": vcov,
+        "objective": result.fun,
         "convergence": result.success,
-        "iterations": result.nit,
-        "objective": result.fun,  # Objective value from optimizer
         "message": result.message,
+        "iterations": result.nit,
+        "jacobian": J,
+        "omega": omega,
+        "n_obs": n_obs,
+        "n_main_params": n_main_orig,
+        "n_fe_params": n_fe_params,
+        "predicted_values": predicted_values,
+        "residuals": residuals,
     }
 
 
@@ -524,51 +361,44 @@ def dsl_general_Jacobian(
     X_orig: np.ndarray,
     Y_pred: np.ndarray,
     X_pred: np.ndarray,
-    model: str = "lm",
+    model: str,
+    fe_Y: Optional[np.ndarray] = None,
+    fe_X: Optional[np.ndarray] = None,
+    n_main_orig: Optional[int] = None,  # Add original n_main
 ) -> np.ndarray:
     """
-    Compute the average Jacobian matrix (k x k) for DSL estimation.
-
-    Parameters
-    ----------
-    par : np.ndarray
-        Parameters at which to evaluate the Jacobian
-    labeled_ind : np.ndarray
-        Labeled indicator
-    sample_prob_use : np.ndarray
-        Sampling probability
-    Y_orig : np.ndarray
-        Original outcome
-    X_orig : np.ndarray
-        Original features
-    Y_pred : np.ndarray
-        Predicted outcome
-    X_pred : np.ndarray
-        Predicted features
-    model : str, optional
-        Model type, by default "lm"
-
-    Returns
-    -------
-    np.ndarray
-        Jacobian matrix
+    Calculate the average Jacobian matrix J = E[dm_i/dpar].
+    Returns a (n_params x n_params) matrix.
     """
-    # Import moment functions
-    from .moment import lm_dsl_Jacobian, logit_dsl_Jacobian
-
-    # Select appropriate Jacobian function
     if model == "lm":
         jac_fn = lm_dsl_Jacobian
+        args = (labeled_ind, sample_prob_use, Y_orig, X_orig, Y_pred, X_pred, model)
     elif model == "logit":
         jac_fn = logit_dsl_Jacobian
+        args = (labeled_ind, sample_prob_use, Y_orig, X_orig, Y_pred, X_pred, model)
+    elif model == "felm":
+        jac_fn = felm_dsl_Jacobian
+        if fe_Y is None or fe_X is None:
+            raise ValueError("fe_Y and fe_X must be provided for felm model")
+        if n_main_orig is None:
+            # Infer n_main_orig if not passed (shouldn't happen in normal flow)
+            n_main_orig = X_orig.shape[1] - (1 if np.all(X_orig[:, 0] == 1) else 0)
+        args = (
+            labeled_ind,
+            sample_prob_use,
+            Y_orig,
+            X_orig,
+            Y_pred,
+            X_pred,
+            model,
+            fe_Y,
+            fe_X,
+            n_main_orig,  # Pass n_main_orig
+        )
     else:
-        raise ValueError(f"Unknown model type: {model}")
+        raise ValueError(f"Unknown model: {model}")
 
-    # Compute Jacobian
-    J = jac_fn(
-        par, labeled_ind, sample_prob_use, Y_orig, X_orig, Y_pred, X_pred, model=model
-    )
-
+    J = jac_fn(par, *args)
     return J
 
 
@@ -580,18 +410,20 @@ def dsl_general_moment(
     X_orig: np.ndarray,
     Y_pred: np.ndarray,
     X_pred: np.ndarray,
+    model: str,
     fe_Y: Optional[np.ndarray] = None,
     fe_X: Optional[np.ndarray] = None,
-    model: str = "lm",
-    tol: float = 1e-5,
+    n_main_orig: Optional[int] = None,  # Add original n_main
 ) -> float:
     """
-    Compute the general DSL GMM objective function value.
+    GMM Objective Function: Sum of squared average moments.
+    Q(par) = m_bar(par).T @ m_bar(par)
+    where m_bar(par) = (1/n) * sum(m_i(par))
 
     Parameters
     ----------
     par : np.ndarray
-        Parameters at which to evaluate the moment
+        Parameter vector
     labeled_ind : np.ndarray
         Labeled indicator
     sample_prob_use : np.ndarray
@@ -599,42 +431,73 @@ def dsl_general_moment(
     Y_orig : np.ndarray
         Original outcome
     X_orig : np.ndarray
-        Original features
+        Original features (standardized)
     Y_pred : np.ndarray
         Predicted outcome
     X_pred : np.ndarray
-        Predicted features
+        Predicted features (standardized)
+    model : str
+        Model type
     fe_Y : Optional[np.ndarray], optional
         Fixed effects outcome, by default None
     fe_X : Optional[np.ndarray], optional
         Fixed effects features, by default None
-    model : str, optional
-        Model type, by default "lm"
-    tol : float, optional
-        Tolerance for numerical stability, by default 1e-5
+    n_main_orig : Optional[int], optional
+        Original number of main parameters, by default None
 
     Returns
     -------
     float
-        Value of the moment function
+        Objective function value
     """
-    # Import moment functions
-    from .moment import felm_dsl_moment_base, lm_dsl_moment_base, logit_dsl_moment_base
+    moments = dsl_general_moment_contributions(
+        par,
+        labeled_ind,
+        sample_prob_use,
+        Y_orig,
+        X_orig,
+        Y_pred,
+        X_pred,
+        fe_Y,
+        fe_X,
+        model,
+        n_main_orig,  # Pass through
+    )
+    m_bar = np.mean(moments, axis=0)
+    return m_bar @ m_bar  # Sum of squared average moments
 
-    # Select appropriate moment function
+
+def dsl_general_moment_contributions(
+    par: np.ndarray,
+    labeled_ind: np.ndarray,
+    sample_prob_use: np.ndarray,
+    Y_orig: np.ndarray,
+    X_orig: np.ndarray,
+    Y_pred: np.ndarray,
+    X_pred: np.ndarray,
+    fe_Y: Optional[np.ndarray],
+    fe_X: Optional[np.ndarray],
+    model: str,
+    n_main_orig: Optional[int],  # Add original n_main
+) -> np.ndarray:
+    """
+    Calculate the moment contributions m_i(par) for each observation.
+    Returns an (n_obs x n_params) matrix.
+    """
     if model == "lm":
         moment_fn = lm_dsl_moment_base
+        args = (labeled_ind, sample_prob_use, Y_orig, X_orig, Y_pred, X_pred)
     elif model == "logit":
         moment_fn = logit_dsl_moment_base
+        args = (labeled_ind, sample_prob_use, Y_orig, X_orig, Y_pred, X_pred)
     elif model == "felm":
         moment_fn = felm_dsl_moment_base
-    else:
-        raise ValueError(f"Unknown model type: {model}")
-
-    # Compute moment
-    if model == "felm":
-        m = moment_fn(
-            par,
+        if fe_Y is None or fe_X is None:
+            raise ValueError("fe_Y and fe_X must be provided for felm model")
+        if n_main_orig is None:
+            # Infer n_main_orig if not passed (shouldn't happen in normal flow)
+            n_main_orig = X_orig.shape[1] - (1 if np.all(X_orig[:, 0] == 1) else 0)
+        args = (
             labeled_ind,
             sample_prob_use,
             Y_orig,
@@ -643,20 +506,13 @@ def dsl_general_moment(
             X_pred,
             fe_Y,
             fe_X,
+            n_main_orig,  # Pass n_main_orig
         )
     else:
-        m = moment_fn(
-            par,
-            labeled_ind,
-            sample_prob_use,
-            Y_orig,
-            X_orig,
-            Y_pred,
-            X_pred,
-        )
+        raise ValueError(f"Unknown model: {model}")
 
-    # Return sum of squared moments
-    return float(np.sum(m**2) + tol)
+    m = moment_fn(par, *args)
+    return m
 
 
 def dsl_general_moment_base_decomp(
@@ -846,6 +702,8 @@ def dsl_general_moment_est(
         Y_pred=y_pred.values.flatten(),
         X_pred=X_pred.values,
         model=model,
+        fe_Y=fe_Y,
+        fe_X=fe_X,
     )
 
     # Compute variance-covariance matrices
@@ -913,3 +771,158 @@ def compute_sandwich_var(J, m, n_obs):
     vcov_scaled = (bread @ meat @ bread.T) / n_obs
 
     return vcov_scaled
+
+
+def dsl_predict_internal(
+    par: np.ndarray,
+    X_orig_std: np.ndarray,  # Standardized X for original data
+    X_pred_std: np.ndarray,  # Standardized X for prediction data
+    model: str,
+    fe_Y: Optional[np.ndarray],
+    fe_X: Optional[np.ndarray],
+    n_main_orig: int,
+    n_fe_params: int,
+) -> np.ndarray:
+    """
+    Internal prediction function used within dsl_general.
+    Uses estimated parameters and standardized data.
+    """
+    if model in ["lm", "linear"]:
+        # Use the original (standardized) data for prediction
+        # Assuming par includes intercept if standardized with intercept
+        return X_orig_std @ par
+    elif model == "logit":
+        z = X_orig_std @ par
+        return 1 / (1 + np.exp(-z))
+    elif model == "felm":
+        par_main = par[:n_main_orig]  # Use original n_main
+        par_fe = par[n_main_orig:]
+        if len(par_fe) != n_fe_params:
+            raise ValueError(
+                f"Fixed effect parameter mismatch: expected {n_fe_params}, got {len(par_fe)}"
+            )
+        if fe_Y is None or fe_X is None:
+            raise ValueError("fe_Y and fe_X required for felm prediction")
+
+        # Calculate fixed effect component
+        fe_use = fe_X @ par_fe
+        # Prediction using standardized X and estimated main + fixed effects
+        return X_orig_std @ par_main + fe_use.flatten()
+    else:
+        raise ValueError(f"Unknown model type for prediction: {model}")
+
+
+def standardize_data(
+    X: np.ndarray,
+    ref_X: np.ndarray,
+    intercept: bool = True,
+    epsilon: float = 1e-8,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Standardize data based on reference data means and standard deviations.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Data to standardize.
+    ref_X : np.ndarray
+        Reference data for calculating means and std devs.
+    intercept : bool, optional
+        Whether to add an intercept term, by default True.
+    epsilon : float, optional
+        Small value to add to std dev denominator for numerical stability.
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray, np.ndarray]
+        Standardized data, means, standard deviations.
+    """
+    if intercept:
+        X_adj = sm.add_constant(X, has_constant="add")
+        ref_X_adj = sm.add_constant(ref_X, has_constant="add")
+    else:
+        X_adj = X.copy()
+        ref_X_adj = ref_X.copy()
+
+    means = np.mean(ref_X_adj, axis=0)
+    stds = np.std(ref_X_adj, axis=0)
+
+    # Don't scale the constant term if it exists
+    if intercept:
+        stds[0] = 1.0  # Set std dev of constant to 1
+        means[0] = 0.0  # Set mean of constant to 0 for centering
+
+    # Add epsilon to avoid division by zero
+    stds_reg = stds + epsilon
+
+    # Standardize (center and scale if intercept, just scale otherwise)
+    if intercept:
+        X_standardized = (X_adj - means) / stds_reg
+    else:
+        X_standardized = X_adj / stds_reg
+
+    return X_standardized, means, stds
+
+
+def rescale_params(
+    par_scaled: np.ndarray,
+    means: np.ndarray,
+    stds: np.ndarray,
+    vcov_scaled: np.ndarray,
+    intercept: bool = True,
+    epsilon: float = 1e-8,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Rescale standardized parameters and their variance-covariance matrix
+    back to the original scale.
+
+    Parameters
+    ----------
+    par_scaled : np.ndarray
+        Estimated parameters on the standardized scale.
+    means : np.ndarray
+        Means used for standardization.
+    stds : np.ndarray
+        Standard deviations used for standardization.
+    vcov_scaled : np.ndarray
+        Variance-covariance matrix for standardized parameters.
+    intercept : bool, optional
+        Whether an intercept was included during standardization.
+    epsilon : float, optional
+        Small value added to stds during standardization.
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        Rescaled parameters, Rescaled variance-covariance matrix.
+    """
+    n_params = len(par_scaled)
+    stds_reg = stds + epsilon
+
+    # Create the rescaling transformation matrix (Jacobian D)
+    D = np.zeros((n_params, n_params))
+
+    if intercept:
+        if len(means) != n_params or len(stds_reg) != n_params:
+            raise ValueError(
+                f"Shape mismatch: par({n_params}), means({len(means)}), stds({len(stds_reg)})"
+            )
+        # First parameter is the intercept
+        D[0, 0] = 1.0
+        # Adjust intercept based on other scaled parameters and means/stds
+        D[0, 1:] = -means[1:] / stds_reg[1:]
+        # Scale other parameters
+        np.fill_diagonal(D[1:, 1:], 1.0 / stds_reg[1:])
+    else:
+        if len(stds_reg) != n_params:
+            raise ValueError(f"Shape mismatch: par({n_params}), stds({len(stds_reg)})")
+        # Only scaling, D is diagonal
+        np.fill_diagonal(D, 1.0 / stds_reg)
+
+    # Rescale parameters: par_orig = D @ par_scaled
+    par_orig = D @ par_scaled
+
+    # Rescale variance-covariance matrix: V_orig = D @ V_scaled @ D.T
+    vcov_orig = D @ vcov_scaled @ D.T
+
+    return par_orig, vcov_orig

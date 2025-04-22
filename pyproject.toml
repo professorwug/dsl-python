@@ -3,8 +3,8 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dsl"
-version = "0.1.0"
+name = "dsl_kit"
+version = "0.1.1"
 description = "Design-based Supervised Learning (DSL) framework in Python"
 readme = "README.md"
 authors = [
@@ -16,7 +16,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "Topic :: Scientific/Engineering :: Statistics",
+    "Topic :: Scientific/Engineering"
 ]
 requires-python = ">=3.9"
 dependencies = [
