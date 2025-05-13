@@ -5,7 +5,7 @@ Unit tests for the moment estimation helper functions
 import numpy as np
 import pandas as pd
 import pytest
-from dsl.helpers.moment import (
+from dsl_kit.helpers.moment import (
     demean_dsl,
     felm_dsl_moment_base,
     lm_dsl_Jacobian,

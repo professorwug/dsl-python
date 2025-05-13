@@ -72,7 +72,7 @@ The core estimation function is `dsl.dsl()`. Here's a basic example:
 import pandas as pd
 import numpy as np
 from patsy import dmatrices
-from dsl_kit.dsl import dsl
+from dsl_kit import dsl
 
 # Prepare your data
 # Your data should have:

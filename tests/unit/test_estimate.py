@@ -4,7 +4,7 @@ Unit tests for the estimation helper functions
 
 import numpy as np
 import pandas as pd
-from dsl.helpers.estimate import available_method, fit_model, fit_test
+from dsl_kit.helpers.estimate import available_method, fit_model, fit_test
 
 
 def test_fit_model():

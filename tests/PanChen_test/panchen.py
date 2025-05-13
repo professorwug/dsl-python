@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 # DSL imports
-from dsl import dsl, plot_power, power_dsl, summary, summary_power
+from dsl_kit import dsl, plot_power, power_dsl, summary, summary_power
 
 
 def generate_sample_data(n_samples=1000, n_features=5, labeled_ratio=0.8, seed=1234):

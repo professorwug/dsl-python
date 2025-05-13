@@ -2,7 +2,7 @@
 Functional tests for the power_dsl function
 """
 
-from dsl.dsl import dsl, power_dsl
+from dsl_kit import dsl, power_dsl
 
 
 def test_power_dsl_with_dsl_output(sample_data, sample_prediction):

@@ -5,7 +5,7 @@ Unit tests for the DSLResult class
 import numpy as np
 import pytest
 
-from dsl.dsl import DSLResult
+from dsl_kit import DSLResult
 
 
 def test_dsl_result_initialization():

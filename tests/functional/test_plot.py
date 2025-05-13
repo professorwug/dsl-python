@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
-from dsl.plot import plot_power
-from dsl.power_dsl import power_dsl
+from dsl_kit.plot import plot_power
+from dsl_kit.power_dsl import power_dsl
 
 
 def test_plot_power(sample_data, sample_prediction):

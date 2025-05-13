@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from patsy import dmatrices
 
-from dsl.dsl import dsl
+from dsl_kit import dsl
 from tests.PanChen_test.compare_panchen import load_panchen_data, prepare_data_for_dsl
 
 

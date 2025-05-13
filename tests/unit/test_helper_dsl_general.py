@@ -4,7 +4,7 @@ Unit tests for the general DSL helper functions
 
 import numpy as np
 import pandas as pd
-from dsl.helpers.dsl_general import (
+from dsl_kit.helpers.dsl_general import (
     dsl_general_Jacobian,
     dsl_general_moment,
     dsl_general_moment_base_decomp,

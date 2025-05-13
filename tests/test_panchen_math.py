@@ -12,11 +12,11 @@ import sys
 import numpy as np
 
 # Removed unused pandas and stats imports
-from python.data.compare_panchen import load_panchen_data, prepare_data_for_dsl
+from tests.PanChen_test.compare_panchen import load_panchen_data, prepare_data_for_dsl
 from patsy import dmatrices, dmatrix
 
 # DSL imports
-from dsl import DSLResult, dsl
+from dsl_kit import dsl, DSLResult
 
 # Configure logging
 logging.basicConfig(

@@ -35,4 +35,4 @@ dependencies = [
 "Bug Tracker" = "https://github.com/Enan456/dsl-python/issues"
 
 [tool.setuptools]
-packages = ["dsl"] 
+packages = ["dsl_kit"] 

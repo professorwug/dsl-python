@@ -4,7 +4,7 @@ Functional tests for the summary and plot functions
 
 import numpy as np
 
-from dsl.dsl import dsl, plot_power, power_dsl, summary, summary_power
+from dsl_kit import dsl, plot_power, power_dsl, summary, summary_power
 
 
 def test_summary_dsl(sample_data, sample_prediction):

@@ -1,7 +1,5 @@
 import numpy as np
-from dsl.power_dsl import power_dsl, summary_power_dsl
-
-from dsl.dsl import dsl, summary
+from dsl_kit import dsl, power_dsl, summary, summary_power
 
 
 def test_summary_dsl(sample_data, sample_prediction):
@@ -52,8 +50,8 @@ def test_summary_dsl(sample_data, sample_prediction):
     assert np.all((result.p_values >= 0) & (result.p_values <= 1))
 
 
-def test_summary_power_dsl(sample_data, sample_prediction):
-    """Test summary_power_dsl function"""
+def test_summary_power(sample_data, sample_prediction):
+    """Test summary_power function"""
     # Add prediction to data
     sample_data["prediction"] = sample_prediction
 
@@ -79,8 +77,8 @@ def test_summary_power_dsl(sample_data, sample_prediction):
         seed=1234,
     )
 
-    # Run summary_power_dsl
-    result = summary_power_dsl(power_result)
+    # Run summary_power
+    result = summary_power(power_result)
 
     # Check result
     assert result is not None

@@ -15,7 +15,7 @@ from patsy import dmatrices
 from scipy import stats
 
 # DSL imports
-from dsl import dsl
+from dsl_kit import dsl
 
 # from pathlib import Path # Unused
 

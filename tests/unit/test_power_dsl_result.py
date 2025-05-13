@@ -5,7 +5,7 @@ Unit tests for the PowerDSLResult class
 import numpy as np
 import pytest
 
-from dsl.dsl import DSLResult, PowerDSLResult
+from dsl_kit import DSLResult, PowerDSLResult
 
 
 def test_power_dsl_result_initialization():

@@ -4,7 +4,7 @@ Functional tests for the main DSL function
 
 import numpy as np
 
-from dsl.dsl import dsl
+from dsl_kit import dsl
 
 
 def test_dsl_linear_regression(sample_data, sample_prediction):
